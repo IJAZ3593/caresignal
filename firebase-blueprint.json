@@ -1,0 +1,183 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated CareSignal user profile stored privately per user UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "workspacePreference": {
+          "type": "string",
+          "enum": ["operations", "scheduling"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "email", "workspacePreference", "createdAt", "updatedAt"]
+    },
+    "SavedPlace": {
+      "title": "SavedPlace",
+      "description": "A user-bookmarked pharmacy or clinic reference from Google Maps / Maps Grounding.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "placeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "mapsUri": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 500
+        },
+        "category": {
+          "type": "string",
+          "enum": ["pharmacy", "clinic", "urgent_care", "other"]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "placeId", "title", "mapsUri", "category", "createdAt", "updatedAt"]
+    },
+    "SavedAppointmentReceipt": {
+      "title": "SavedAppointmentReceipt",
+      "description": "Non-PII appointment booking summary synced to the signed-in user's workspace.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "appointmentType": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "slotDate": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 20
+        },
+        "slotTime": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 20
+        },
+        "clinicianLabel": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "cancelled"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "bookingId",
+        "appointmentType",
+        "slotDate",
+        "slotTime",
+        "clinicianLabel",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Trusted administrator grant record.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "grantedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile keyed by Firebase Auth UID (strictly owner or admin accessible)."
+    },
+    "/users/{userId}/savedPlaces/{placeDocId}": {
+      "schema": { "$ref": "#/entities/SavedPlace" },
+      "description": "Saved Google Maps clinic/pharmacy bookmarks owned by the parent user."
+    },
+    "/users/{userId}/appointments/{bookingDocId}": {
+      "schema": { "$ref": "#/entities/SavedAppointmentReceipt" },
+      "description": "Booking confirmation receipts owned by the parent user."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Trusted admin allowlist records."
+    }
+  }
+}

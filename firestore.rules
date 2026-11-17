@@ -1,0 +1,236 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Shared Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser()
+        && request.auth.token.email == 'malikijaz35938@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Entity Validators (Anti-Update-Gap)
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'workspacePreference', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'workspacePreference', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.displayName is string
+        && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string
+        && data.email.size() >= 3 && data.email.size() <= 160
+        && data.workspacePreference in ['operations', 'scheduling']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedPlace(data, userId) {
+      return data.keys().hasAll(['ownerId', 'placeId', 'title', 'mapsUri', 'category', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'placeId', 'title', 'mapsUri', 'category', 'note', 'createdAt', 'updatedAt'])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.placeId is string
+        && data.placeId.size() >= 1 && data.placeId.size() <= 200
+        && data.title is string
+        && data.title.size() >= 1 && data.title.size() <= 160
+        && data.mapsUri is string
+        && data.mapsUri.size() >= 8 && data.mapsUri.size() <= 500
+        && data.mapsUri.matches('^https://.*')
+        && data.category in ['pharmacy', 'clinic', 'urgent_care', 'other']
+        && (!data.keys().hasAny(['note']) || (data.note is string && data.note.size() <= 300))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAppointmentReceipt(data, userId) {
+      return data.keys().hasAll(['ownerId', 'bookingId', 'appointmentType', 'slotDate', 'slotTime', 'clinicianLabel', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'bookingId', 'appointmentType', 'slotDate', 'slotTime', 'clinicianLabel', 'status', 'createdAt', 'updatedAt'])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.bookingId is string
+        && data.bookingId.size() >= 2 && data.bookingId.size() <= 40
+        && data.appointmentType is string
+        && data.appointmentType.size() >= 2 && data.appointmentType.size() <= 60
+        && data.slotDate is string
+        && data.slotDate.size() >= 8 && data.slotDate.size() <= 20
+        && data.slotTime is string
+        && data.slotTime.size() >= 4 && data.slotTime.size() <= 20
+        && data.clinicianLabel is string
+        && data.clinicianLabel.size() >= 2 && data.clinicianLabel.size() <= 80
+        && data.status in ['confirmed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data, adminId) {
+      return data.keys().hasAll(['uid', 'grantedAt'])
+        && data.keys().hasOnly(['uid', 'grantedAt'])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == adminId
+        && data.grantedAt is timestamp;
+    }
+
+    // Admin Allowlist Collection
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(adminId)
+        && isValidAdminMember(incoming(), adminId)
+        && incoming().grantedAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminId);
+    }
+
+    // User Profile Collection (PII isolated to owner or admin)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() && resource.data.uid is string;
+
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'workspacePreference', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      // Saved Places Subcollection (Master Gate checks parent /users/{userId})
+      match /savedPlaces/{placeDocId} {
+        allow get: if isValidId(userId) && isValidId(placeDocId) && (isOwner(userId) || isAdmin());
+        allow list: if isVerifiedUser()
+          && (
+            (request.auth.uid == userId && resource.data.ownerId == request.auth.uid) ||
+            isAdmin()
+          );
+
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(placeDocId)
+          && isValidSavedPlace(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(placeDocId)
+          && isValidSavedPlace(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().placeId == existing().placeId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            isAdmin() ||
+            (
+              isOwner(userId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'note', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isValidId(userId)
+          && isValidId(placeDocId)
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // Appointment Booking Receipts Subcollection (Master Gate + Terminal State Lock)
+      match /appointments/{bookingDocId} {
+        allow get: if isValidId(userId) && isValidId(bookingDocId) && (isOwner(userId) || isAdmin());
+        allow list: if isVerifiedUser()
+          && (
+            (request.auth.uid == userId && resource.data.ownerId == request.auth.uid) ||
+            isAdmin()
+          );
+
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(bookingDocId)
+          && isValidAppointmentReceipt(incoming(), userId)
+          && incoming().status == 'confirmed'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(bookingDocId)
+          && isValidAppointmentReceipt(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().bookingId == existing().bookingId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            isAdmin() ||
+            (
+              isOwner(userId)
+              && existing().status != 'cancelled'
+              && incoming().status == 'cancelled'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isValidId(userId)
+          && isValidId(bookingDocId)
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+  }
+}
